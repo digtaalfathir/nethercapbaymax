@@ -1,373 +1,261 @@
-# nethercap — WiFi Security Research Toolkit untuk ESP8266
+# nethercap — WiFi Security Research Toolkit (ESP8266)
 
-Toolkit WiFi security berbasis ESP8266 Wemos D1 Mini untuk penelitian, pembelajaran, dan testing keamanan jaringan di lingkungan lokal/lab. Implementasi dari berbagai teknik WiFi yang sering dibahas di komunitas security: beacon spam, station counting, deauth detection, deauth injection, precise deauth, dan evil twin dengan credential capture.
+Toolkit WiFi security berbasis **Wemos D1 Mini (ESP8266)** untuk penelitian, pembelajaran, dan testing keamanan jaringan di lingkungan lokal/lab. Bisa dioperasikan **sepenuhnya dari layar TFT + 3 tombol** (standalone, tanpa laptop) maupun lewat **CLI serial**.
 
-**Status**: Semua modul (7) aktif dan teruji. Dokumentasi & roadmap selesai. Siap untuk eksplorasi & customization.
+Fitur: WiFi scanner & sniffer, count station, beacon spam, deauth monitor (defensif), deauth, precise deauth, dan evil twin dengan captive portal + verifikasi password + auto-deauth.
+
+**Versi:** 0.2.0 · **Status:** 7 modul aktif & teruji, UI TFT (Phase 2) lengkap.
+
+> ⚠️ **Untuk lab/testing lokal & edukasi saja.** Lihat [Catatan Legal](#catatan-legal--etis).
 
 ---
 
-## Hardware Requirements
+## Daftar Isi
+- [Hardware & Wiring](#hardware--wiring)
+- [Setup & Build](#setup--build)
+- [Dua Cara Kontrol: TFT & CLI](#dua-cara-kontrol-tft--cli)
+- [Fitur & Cara Pakai](#fitur--cara-pakai)
+- [Evil Twin (detail)](#evil-twin-detail)
+- [Arsitektur Kode](#arsitektur-kode)
+- [SDK Patch (deauth)](#sdk-patch-deauth)
+- [Troubleshooting](#troubleshooting)
+- [Roadmap](#roadmap)
+- [Catatan Legal & Etis](#catatan-legal--etis)
 
-- **Microcontroller**: Wemos D1 Mini (ESP8266) — board populer, murah, banyak referensi
-  - Alternatif: ESP8266 DevKit V1, atau ESP8266 lainnya yang compatible Arduino
-- **Power**: USB micro-B atau power bank (0.5A cukup)
-- **Serial adapter**: CH340 (included di Wemos D1 Mini)
-- **Opsional**: OLED display (SSD1306) untuk tampilan real-time; SD card untuk log capture (PCAP, credentials)
+---
 
-### Setup Pertama Kali (Linux/Zorin)
+## Hardware & Wiring
+
+| Komponen | Detail |
+|---|---|
+| **MCU** | Wemos D1 Mini (ESP8266, 4MB flash) |
+| **Display** | TFT 240×280 **ST7789** (SPI, mis. IPS 1.69") |
+| **Input** | 3 push button (UP / DOWN / OK) |
+| **Power** | USB micro-B / power bank |
+
+### TFT (hardware SPI)
+
+| TFT | Wemos | GPIO | Keterangan |
+|---|---|---|---|
+| VCC | 3V3 | — | 3.3V |
+| GND | GND | — | Ground |
+| SCL/SCK | D5 | 14 | SPI Clock (HSPI) |
+| SDA/MOSI | D7 | 13 | SPI MOSI (HSPI) |
+| RES/RST | D0 | 16 | Reset |
+| DC/A0 | D2 | 4 | Data/Command |
+| CS | D8 | 15 | Chip Select |
+| BLK/LED | 3V3 | — | Backlight (selalu nyala) |
+
+### Tombol (kaki satunya ke GND, pakai internal pull-up)
+
+| Tombol | Wemos | GPIO | Catatan |
+|---|---|---|---|
+| **UP** | D1 | 5 | bebas |
+| **DOWN** | D4 | 2 | shared LED onboard (kedip dikit, harmless) |
+| **OK** | D3 | 0 | **jangan ditahan saat power-on/reset** (masuk flash mode) |
+
+> **OK tahan >0.6 detik = BACK** (karena cuma 3 tombol). GPIO12/D6 (MISO) **tidak bisa** dipakai tombol karena diklaim peripheral SPI saat TFT aktif.
+
+---
+
+## Setup & Build
+
+Pakai **PlatformIO** (extension di VSCode). Library & toolchain auto-download saat build pertama.
 
 ```bash
-# 1. Install driver CH340 & izin serial
-sudo apt install -y git python3-venv python3-pip
-sudo usermod -aG dialout $USER
-# Logout & login ulang agar group aktif
+# Izin serial (Linux/Zorin) — sekali saja
+sudo usermod -aG dialout $USER          # lalu logout/login ulang
+sudo apt remove brltty                  # fix bug CH340 "dibajak" brltty
 
-# 2. Clone & masuk folder project
-git clone https://github.com/yourusername/nethercap.git
-cd nethercap
-
-# 3. PlatformIO akan auto-download framework & tools saat build pertama
-# Jika belum install PlatformIO IDE extension di VSCode: buka Extensions, cari "PlatformIO IDE", install
-
-# 4. Build & flash
+# Build + upload + monitor
 pio run -t upload && pio device monitor
-# Monitor dibuka otomatis, lihat boot message & prompt ">"
 ```
 
-**Troubleshooting setup:**
-- `/dev/ttyUSB0: Permission denied` → pastikan `dialout` group active (`groups` di terminal)
-- `board not found` → pastikan Wemos colok, cek `ls /dev/ttyUSB*`
-- Upload gagal timeout → ubah `upload_speed` di `platformio.ini` dari 921600 → 115200
+> ⚠️ Saat upload, **jangan tahan tombol OK** (GPIO0 = flash mode).
+
+Konfigurasi TFT & SDK-patch sudah disetel di [`platformio.ini`](platformio.ini) (build_flags TFT_eSPI + `extra_scripts = pre:patch_sdk.py`). Tidak perlu edit library.
 
 ---
 
-## Fitur & Modul
+## Dua Cara Kontrol: TFT & CLI
 
-### 1. WiFi Scanner & Sniffer Engine
-**Command**: `scan`, `sniff`, `channel`, `hop`, `stats`
+Keduanya jalan **paralel** dan mengontrol engine yang sama.
 
-Fondasi semua modul detection & attack. Capture frame 802.11 mentah, parse header, channel hopping.
+### TFT + tombol (standalone)
+- **UP/DOWN** = navigasi · **OK** = pilih/aksi · **OK ditahan** = back/stop
+- Boot → splash "Nethercap Baymax" → menu 8 fitur
+- Fitur yang butuh target (count/deauth/precise/evil) → pilih AP dari layar scan → layar aksi live
 
-```
-> scan                              # scan AP aktif (STA mode)
-> sniff                             # mulai promiscuous sniffer
-> channel 11                        # kunci channel 11 (hop off)
-> hop on                            # balik ke channel hopping 1-13
-> stats                             # lihat counter frame per tipe
-> sniff stop                        # berhenti sniffer
-```
+### CLI serial (115200 baud)
+Ketik `help` untuk daftar perintah:
 
-**Cara kerja**: engine menjalankan callback promiscuous & kumpulkan frame di ring buffer, cetak per-frame + stats periodik. Verbose-nya bisa off biar display bersih saat collect data (diatur otomatis modul lain).
-
----
-
-### 2. Count Station (Terpandu)
-**Command**: `count`
-
-Kumpulkan daftar AP + client-nya. Flow: scan AP → pilih nomor → device kunci channel & collect client real-time.
-
-```
-> count
-=== pilih AP untuk Count Station ===
-  0) ch11  -45dBm  6C:A5:D1:32:9E:A0  Stechoq Robotika Indonesia
-  1) ch11  -76dBm  FC:A6:CD:83:8A:30  SUADAYA
-ketik nomor AP (atau 'q' batal):
-count AP#> 0
-[count] Stechoq... ch11 : 2 station
-   1) A4:83:E7:11:22:33  -55dBm  pkts=210  age=0s
-   2) 3C:5A:B4:44:55:66  -61dBm  pkts=18   age=2s
-```
-
-**Catatan**: MAC randomization di HP modern bikin count bisa over-estimate. Saat client benar asosiasi, MAC stabil muncul di bawah AP-nya. `count stop` untuk berhenti.
+| Perintah | Fungsi |
+|---|---|
+| `help` / `info` | bantuan / status perangkat |
+| `scan` | scan AP aktif |
+| `sniff` / `sniff stop` | promiscuous sniffer |
+| `channel <1-13>` / `hop [on\|off]` | kontrol channel |
+| `stats` | counter frame |
+| `count` / `count stop` | count station (pilih AP) |
+| `stations` / `stations clear` | dump semua AP→client |
+| `beacon` | menu beacon spam |
+| `dmon` / `dmon stop` / `dmon test` | deauth monitor |
+| `deauth` / `deauth stop` | deauth broadcast (pilih AP) |
+| `pdeauth` / `pdeauth stop` | precise deauth per-client |
+| `evil` / `evil stop` | evil twin + portal |
 
 ---
+
+## Fitur & Cara Pakai
+
+### 1. Sniffer & Scanner
+Fondasi semua modul. Promiscuous capture frame 802.11 + channel hopping.
+- **TFT → Scan AP**: list AP (scroll, OK rescan).
+- **TFT → Sniffer**: counter live (total/mgmt/data/deauth); UP/DN ganti channel, OK toggle hop.
+- **CLI**: `scan`, `sniff`, `channel`, `hop`, `stats`.
+
+### 2. Count Station
+Hitung client yang terhubung ke 1 AP target.
+- **Flow**: pilih AP → layar live **"N station"**.
+- Channel dikunci ke AP target (akurat). MAC randomization bisa bikin angka over-estimate.
+- **CLI**: `count` → pilih nomor → `count stop`.
 
 ### 3. Beacon Spam
-**Command**: `beacon`
+Broadcast banyak SSID palsu (sweep ch 1-13).
+- **TFT → Beacon Spam**: OK start/stop, UP +5 SSID acak, DN clear.
+- **CLI**: `beacon` → menu (manual/acak/start).
+- Pacing `delay(1)` per frame supaya buffer TX tidak penuh.
 
-Broadcast beacon frame dengan SSID palsu (manual atau random). Muncul di list WiFi device sekitar.
+### 4. Deauth Monitor (defensif)
+Deteksi serangan deauth/disassoc + alarm saat burst.
+- **TFT → Deauth Monitor**: banner **AMAN/SERANGAN** + rate; OK = uji alarm (suntik sintetis).
+- **CLI**: `dmon`, `dmon test`, `dmon stop`. Ambang default 8 frame/detik ([deauthmon.cpp](src/deauthmon.cpp) `DM_THRESHOLD`).
 
-```
-> beacon
-=== BEACON SPAM === (0 SSID, stop)
-  1) tambah SSID manual
-  2) generate acak
-  3) lihat daftar
-  4) hapus semua
-  5) START spam
-  6) STOP spam
-pilih (1-6, 'q' keluar):
-beacon> 2
-berapa SSID acak? (1-32):
-jumlah> 15
-  + 15 SSID acak (total 15)
+### 5. Deauth (broadcast)
+Tendang semua client dari AP target.
+- **Flow**: pilih AP → banner **MENGGEMPUR** + sukses/gagal live.
+- Frame: mgmt subtype 12 + 10, addr1=broadcast, addr2/3=BSSID spoofed.
+- **CLI**: `deauth` → pilih nomor → `deauth stop`.
 
-beacon> 5
-[beacon] START — 15 SSID di-broadcast (sweep ch1-13). Cari ini di scan:
-   * aXk9Qm              02:1A:3F:8C:DD:01
-   * ...
-[beacon] STOP — sukses 5430, gagal 0
-```
+### 6. Precise Deauth (per-client)
+Deauth unicast 2-arah ke 1 client tertentu (lebih terarah).
+- **Flow**: pilih AP → kumpulkan client live → pilih nomor client (atau **">> Semua client"**) → serang.
+- **CLI**: `pdeauth` → pilih AP → ketik nomor client / `a` semua / `r` reset / `q`.
 
-**Fitur**: sweep channel 1-13 otomatis; pacing `delay(1)` antar-frame biar buffer TX tidak penuh. BSSID di-generate random (locally administered). Kalau semua gagal → pastikan promiscuous enable (sniffer harus jalan atau manual enable di kode).
+### 7. Evil Twin
+Lihat bagian khusus di bawah.
+
+> **Catatan**: deauth & precise-deauth bergantung pada [SDK patch](#sdk-patch-deauth). **WPA3/PMF (802.11w) kebal** terhadap deauth — itu fitur keamanan, bukan bug.
 
 ---
 
-### 4. Deauth Monitor (Deteksi/Defensif)
-**Command**: `dmon`
+## Evil Twin (detail)
 
-Monitor frame deauth & disassoc, hitung rate, alarm saat burst (ciri serangan deauth flood). Sisi penanganan — identifikasi serangan & sumber-nya.
+AP kembar (SSID identik, **terbuka**) + captive portal yang menangkap password Wi-Fi dan **memverifikasinya ke AP asli**.
 
+### Flow
 ```
-> dmon
-[dmon] MONITOR aktif — ambah 8 deauth/detik, hop on.
-       'dmon stop' berhenti | 'dmon test' uji alarm
-[dmon] clear — tidak ada deauth/disassoc
-
-# 1 detik kemudian, rate naik
-[dmon] 3 deauth/disassoc per detik (di bawah ambang)
-
-# Saat > ambang
-*** ALARM DEAUTH *** 30 frame/detik (ambang 8) — kemungkinan serangan!
-  sumber terdeteksi (1):
-   - src DE:AD:BE:EF:13:37  bssid 6C:A5:D1:32:9E:A0  count=30  ch6  -42dBm  age=0s
+evil → pilih AP → twin nyala (Auto-deauth default OFF)
+  → korban masuk twin → captive portal "Masuk ke Wi-Fi" (minta password)
+     → SALAH : portal minta ulang
+     → BENAR : halaman "menyelesaikan koneksi" (progress bar ~8s)
+               → deauth auto-OFF → twin auto-bongkar (~9s)
+               → korban auto-reconnect ke AP asli (mulus, tak curiga)
 ```
 
-**Test alarm**: `dmon test` suntik 30 frame sintetis tanpa penyerang nyata (verifikasi logika jalan). Threshold bisa di-tune di `DM_THRESHOLD` ([deauthmon.cpp:21](src/deauthmon.cpp#L21)).
+### Auto-deauth (toggle dengan OK di layar Evil Twin)
+| | OFF (default) | ON |
+|---|---|---|
+| AP asli | tetap normal | digempur deauth terus |
+| Korban masuk twin | sukarela (kepancing) | dipaksa pindah |
+| Deteksi | senyap | terdeteksi `dmon` |
+| Cocok | WiFi publik / device baru | maksa kick dari WiFi aktif |
+
+### Teknis penting
+- **Mode AP murni** saat portal (STA dimatikan) → DHCP stabil; STA hanya nyala sebentar saat verifikasi password.
+- **MAC default ESP** (BSSID twin ≠ AP asli) → auto-deauth tak menendang client twin sendiri. *(Clone MAC custom dihindari karena bikin asosiasi/DHCP gagal di ESP8266.)*
+- **Verifikasi real-time**: `WiFi.begin(ssid, pwd)` ke AP asli — connect = password benar.
+- **Auto-teardown** saat password benar → jaringan kembali normal.
+
+### Batasan
+Device yang sudah **menyimpan AP asli sebagai WPA2** kadang menolak join twin terbuka (proteksi anti-downgrade OS). Evil twin paling ampuh untuk **WiFi publik/terbuka** atau device yang belum menyimpan network target.
 
 ---
 
-### 5. Deauth (Broadcast)
-**Command**: `deauth`
-
-Inject frame deauth broadcast ke AP target (semua client sekaligus). Alasan (2) disassoc.
+## Arsitektur Kode
 
 ```
-> deauth
-[deauth] memindai AP...
-=== pilih AP untuk DEAUTH ===
-  0) ch11  -49dBm  6C:A5:D1:32:9E:A0  Stechoq Robotika Indonesia
-ketik nomor AP (atau 'q' batal):
-deauth AP#> 0
-[deauth] TARGET Stechoq... ch11 : sukses=4120 gagal=0
-# ... tiap 2 detik
-[deauth] TARGET ... ch11 : sukses=8540 gagal=0
-deauth stop
-[deauth] STOP — sukses=8540 gagal=0
+src/
+  main.cpp        entry: init semua modul + loop
+  cli.h/.cpp      control plane serial (command + mode input terpandu)
+  buttons.h/.cpp  3 tombol (debounce + long-press = back)
+  ui.h/.cpp       UI TFT (menu + layar tiap fitur)
+  sniffer.h/.cpp  promiscuous engine (fondasi) + ring buffer + channel hop
+  station.h/.cpp  count station
+  beacon.h/.cpp   beacon spam
+  deauthmon.h/.cpp deauth monitor (defensif)
+  deauth.h/.cpp   deauth broadcast
+  pdeauth.h/.cpp  precise deauth per-client
+  evil.h/.cpp     evil twin + captive portal + auto-deauth
+patch_sdk.py      pre-build: buka blokir injection deauth di SDK
+platformio.ini    config board + TFT_eSPI + SDK patch hook
 ```
 
-**Catatan**: WPA3/PMF (802.11w) **kebal** — frame deauth unauthenticated ditolak. HP modern + router serius sudah PMF enable. Broadcast deauth efektif pada setup lama atau device yang abaikan broadcast.
-
-> **SDK Patch**: deauth diblok di `wifi_send_pkt_freedom` level library SDK (whitelist subtype). Project ini include pre-build script `patch_sdk.py` yang membuka blok itu (1 instruksi di libnet80211.a). Patch idempotent & global (~/.platformio) — revert dengan delete script atau reinstall platform.
+**Pola engine→handler**: modul analisis (station/dmon/pdeauth) memasang handler ke sniffer via `sniffer_add_handler()`. Modul attack & UI memanggil **API programatik** tiap modul (`*_attack`, `*_on`, `*_stats`) — jadi CLI dan TFT adalah dua "remote" ke engine yang sama tanpa duplikasi logika.
 
 ---
 
-### 6. Precise Deauth (Per-Client)
-**Command**: `pdeauth`
+## SDK Patch (deauth)
 
-Deauth **unicast** ke 1 client spesifik (2 arah: AP→client + client→AP). Lebih efektif & targeted dari broadcast.
+Deauth/disassoc diblok di library ESP8266 (`ieee80211_freedom_output` cuma izinkan data/beacon/probe). [`patch_sdk.py`](patch_sdk.py) (pre-build, otomatis) mem-patch 1 instruksi di `libnet80211.a` semua versi NONOSDK agar **semua management frame** lolos:
 
-```
-> pdeauth
-[pdeauth] memindai AP...
-=== pilih AP untuk PRECISE DEAUTH ===
-  0) ch11  -55dBm  6C:A5:D1:32:9E:A0  Stechoq Robotika Indonesia
-ketik nomor AP (atau 'q' batal):
-pdeauth AP#> 0
-[pdeauth] AP Stechoq... ch11 — mengumpulkan client...
-[pdeauth] client AP 6C:A5:D1:32:9E:A0 ch11 — 2 terlihat:
-   0) A4:83:E7:11:22:33  -55dBm  pkts=84  age=0s
-   1) 3C:5A:B4:44:55:66  -61dBm  pkts=12  age=1s
-   nomor=deauth client itu | 'a'=semua | 'r'=reset | 'q'=batal
-client#> 0
-[pdeauth] DEAUTH client A4:83:E7:11:22:33 di AP 6C:A5:D1:32:9E:A0 ch11
-[pdeauth] -> A4:83:E7:11:22:33 : sukses=3120 gagal=210
-pdeauth stop
-[pdeauth] STOP — sukses=3120 gagal=210
-```
-
-**Flow**: fase collect (sniffer locked ch, handler rekam hanya client AP target) → user pilih nomor client (atau `a`=semua) → fase attack (unicast 2-arah, paced).
+- Idempotent + backup `.orig` otomatis · re-apply tiap build
+- **Global** (`~/.platformio/...`) → mempengaruhi project ESP8266 lain di mesin ini
+- **Revert**: hapus baris `extra_scripts` di `platformio.ini`, atau restore dari `libnet80211.a.orig` / reinstall platform
 
 ---
 
-### 7. Evil Twin + Captive Portal
-**Command**: `evil`
+## Troubleshooting
 
-AP rogue yang clone SSID + BSSID asli, open network (tanpa password). Saat client masuk, serve captive portal → minta re-enter password → **verifikasi password ke AP asli (STA)** → tangkap jika benar, atau minta ulang jika salah.
-
-```
-> evil
-[evil] memindai AP...
-=== pilih AP untuk EVIL TWIN ===
-  0) ch11  -55dBm  6C:A5:D1:32:9E:A0  Stechoq Robotika Indonesia
-ketik nomor AP (atau 'q' batal):
-evil AP#> 0
-[evil] AKTIF — twin 'Stechoq...' ch11, BSSID 6C:A5:D1:32:9E:A0
-       portal di http://192.168.4.1/  — tunggu korban masuk. 'evil stop' utk berhenti
-
-# Korban nyambung & isi password
-[evil] >>> PASSWORD DICOBA: "password123"  (dari 192.168.1.50)
-[evil] password SALAH: "password123" — portal minta ulang
-[evil] 'Stechoq...' ch11 | client tersambung: 1
-
-# Korban ulang & benar kali ini
-[evil] >>> PASSWORD DICOBA: "benarnyapassword"  (dari 192.168.1.50)
-
-[evil] ====================================
-[evil]  PASSWORD BENAR: "benarnyapassword"
-[evil]  SSID: Stechoq Robotika Indonesia
-[evil] ====================================
-[evil] 'Stechoq...' ch11 | client tersambung: 1 | PASSWORD TERTANGKAP
-```
-
-**Teknis**:
-- **WiFi mode AP+STA**: AP jadi twin, STA untuk verifikasi password ke AP asli
-- **BSSID clone**: `wifi_set_macaddr(SOFTAP_IF, bssid)` (best-effort, beberapa chip ignore)
-- **Captive portal**: DNS spoofing (catch-all) + web server HTTP di 192.168.4.1
-- **Verifikasi real-time**: `WiFi.begin(ssid, pwd)` non-blocking, lihat koneksi sukses/timeout → tentukan password benar/salah
-- **UI**: HTML profesional (Bahasa Indonesia), form password, feedback error
-
-**Improvement untuk v2** (roadmap):
-- Auto-deauth AP asli saat twin aktif (paksa client switch)
-- Simpan credentials ke SPIFFS (persistent logging)
-- Web log page (`/log`) untuk lihat captured passwords
-
----
-
-## Command Summary
-
-| Command | Fungsi |
+**TFT (tweak di [platformio.ini](platformio.ini) / [ui.cpp](src/ui.cpp)):**
+| Gejala | Fix |
 |---|---|
-| `help` | Daftar semua perintah |
-| `info` | Info chip (ID, flash, free RAM, status sniffer) |
-| `scan` | Scan AP aktif (STA mode) |
-| `sniff` | Mulai/stop promiscuous sniffer |
-| `channel <1-13>` | Kunci channel tetap (hop off) |
-| `hop [on\|off]` | Toggle channel hopping |
-| `stats` | Cetak counter frame per tipe |
-| `count` | Count station terpandu (pilih AP → collect client live) |
-| `stations` | Dump semua AP→client (mode bebas) |
-| `beacon` | Menu beacon spam (manual/acak/start) |
-| `dmon` | Deauth monitor (alert saat burst) |
-| `deauth` | Deauth broadcast (pilih AP → gempur) |
-| `pdeauth` | Precise deauth per-client (pilih AP → client → attack) |
-| `evil` | Evil twin + portal (clone AP → capture password) |
+| Blank/putih | cek wiring DC=D2, CS=D8, RST=D0, VCC=3V3 |
+| Warna negatif | `-D TFT_INVERSION_OFF=1` |
+| Merah↔Biru tertukar | `-D TFT_RGB_ORDER=TFT_BGR` |
+| Gambar geser/kebalik | ubah `tft.setRotation(0)` (coba 2) di `ui_init()` |
+| Tepi kepotong | naikkan `MX` (margin) di ui.cpp |
+
+**Lain-lain:**
+- `/dev/ttyUSB0: Permission denied` → group `dialout` belum aktif (re-login).
+- Upload gagal 921600 → set `upload_speed = 115200`.
+- Beacon/deauth `gagal` tinggi → pastikan SDK patch ke-apply (lihat log build `[nethercap] ... DIPATCH`).
+- Sniffer `dropped` naik di area ramai → wajar (ring buffer 24, callback sengaja ringan). Kunci 1 channel untuk akurasi.
+- Evil twin: HP gagal dapat IP → pastikan pakai versi terbaru (MAC clone sudah dibuang). Device yang simpan WPA2 asli → "forget" dulu untuk test.
 
 ---
 
-## Catatan Teknis & Troubleshooting
+## Roadmap
 
-### SDK Patch Deauth
-Deauth/disassoc diblok di level library ESP8266 (`ieee80211_freedom_output`). Project include `patch_sdk.py` yang:
-1. Backup original `libnet80211.a` → `libnet80211.a.orig`
-2. Patch 1 instruksi (Xtensa assembly) di semua NONOSDK versi
-3. Jalankan otomatis saat build (`extra_scripts` di platformio.ini)
-4. Idempotent — aman di-run berkali-kali
-
-Jika mau revert: hapus `extra_scripts` line di platformio.ini, atau `cp ~/.platformio/packages/.../libnet80211.a.orig ~/.platformio/packages/.../libnet80211.a`.
-
-### Frame Capture Rate & Dropping
-Ring buffer sniffer ukuran 24 frame — saat traffic padat, frame bisa di-drop (print "dropped" di stats). Ini **trade-off**: callback ringan (jaga responsivitas) vs buffer penuh → frame hilang. Kalau butuh capture 100%, bisa naikkan `RING_SZ` di [sniffer.cpp:28](src/sniffer.cpp#L28) (tapi naikin RAM usage).
-
-### Channel Hopping vs Accuracy
-Hop on (default) = sweep ch1-13 @300ms per channel. Client di channel lain bisa kelewat saat lagi hop. Untuk **akurat 1 AP**: `channel 11` (kunci, hop off). Trade-off coverage vs precision.
-
-### MAC Randomization
-HP modern pakai MAC random saat probe-req & sebelum asosiasi penuh. Jadi daftar client bisa "membengkak" dengan MAC-MAC berbeda dari device yang sama. Saat benar asosiasi, MAC stabil → muncul di tabel dengan benar.
-
-### Threshold Deauth Monitor
-Default `DM_THRESHOLD = 8` frame/detik (2 frame deauth + 2 disassoc per client, 2 client = 8). Kalau banyak false alarm di area ramai, naikkan threshold di [deauthmon.cpp:21](src/deauthmon.cpp#L21).
-
-### Encryption & Payload
-Sniffer hanya baca **header + metadata** frame (MAC, channel, RSSI, tipe). **Payload frame data encrypted** (WPA2/WPA3) **tidak decryptable tanpa handshake + PSK** — ini by design WiFi. Evil twin bisa tangkap *password teks*, bukan payload.
-
----
-
-## Performance & Resource
-
-**RAM**: ~50% terpakai saat all modules loaded
-```
-sniffer engine     ~10KB
-count station      ~2KB  (tabel 24AP + 64 client)
-deauth monitor     ~1KB  (tabel 16 sumber)
-precise deauth     ~2KB  (tabel 24AP + 32 client)
-beacon spam        ~1KB  (list 32 SSID)
-evil twin          ~8KB  (web server + DNS)
-sisa buffer        ~41KB
-```
-
-**Flash**: ~31% (dengan evil twin web server)
-```
-framework     ~200KB
-core libs     ~80KB
-project code  ~47KB
-```
-
-**Rate promiscuous**: ~100-200 frame/s normal area; padat -> ring drop.
-
----
-
-## Learning Resources & Next Steps
-
-### Dokumentasi Internal
-- [sniffer.cpp](src/sniffer.cpp) — promiscuous callback, ring buffer, channel hopping
-- [station.cpp](src/station.cpp) — table AS, To-DS/From-DS parsing
-- [beacon.cpp](src/beacon.cpp) — beacon frame building, `wifi_send_pkt_freedom`
-- [deauthmon.cpp](src/deauthmon.cpp) — frame filtering, rate window, alarm threshold
-- [evil.cpp](src/evil.cpp) — web server, DNS spoof, STA verifikasi
-
-### Ide Customization
-1. **OLED display** — real-time stats (top 5 AP, live rate, etc)
-2. **SD card logging** — PCAP export (`libpcap` format), credential persist
-3. **Web UI** — replace CLI dengan web dashboard, live graph
-4. **BLE sniffer** — tangkap advertising BLE (sama modul)
-5. **WiFi 6 (802.11ax)** — ESP32-C6 support (next gen)
-6. **Evil twin improvement** — auto-deauth AP asli, fake portal phishing, email exfil
-
-### Reference Terbuka
-- **esp8266_deauther** (Spacehuhn) — OG deauther, code clean untuk beacon/deauth
-- **WiFi security research** — lihat IEEE 802.11 spec (frame format, reason codes)
-- **Xtensa assembly** — untuk custom SDK patch
+Belum dikerjakan (urut prioritas):
+1. Credential logging persistent (SPIFFS) + halaman `/log`
+2. Multi-SSID evil twin
+3. OLED tambahan / indikator status
+4. Settings persistent (LittleFS)
+5. PCAP export (Wireshark), event logger
+6. OUI lookup (vendor MAC), channel graph
 
 ---
 
 ## Catatan Legal & Etis
 
-**Project ini untuk lab/testing lokal saja.** Beberapa teknik (deauth, evil twin, password capture) **illegal tanpa otorisasi**:
+**Hanya untuk jaringan milik sendiri, lab terkontrol, atau pentest dengan izin tertulis.**
 
-- ✅ **Aman**: testing di jaringan milikmu sendiri, environment lab terkontrol, penelitian educational
-- ❌ **Ilegal**: attack jaringan orang lain, target tanpa izin, pengguna tanpa notifikasi
+- ✅ **Sah**: test router sendiri, pembelajaran 802.11, CTF, red-team berizin.
+- ❌ **Ilegal**: menyerang jaringan/orang tanpa otorisasi, mencuri kredensial, DoS layanan publik.
 
-Use case sah:
-- Test keamanan router milikmu
-- Pembelajaran tentang 802.11
-- Penetration testing dengan approval written dari client
-- CTF/security competition
-- Red team exercise di perusahaan sendiri
-
-**Jangan**: gunakan nethercap untuk denial-of-service, stealing credentials dari orang lain, atau merusak layanan publik.
+Beberapa fitur (deauth, evil twin, password capture) ilegal tanpa otorisasi. Gunakan dengan bertanggung jawab.
 
 ---
 
-## Lisensi & Attribution
-
-**License**: MIT (bebas digunakan, modifikasi, distribute — dengan attribution)
-
-**Inspiration & Reference**:
-- Espressif ESP8266 SDK & API
-- esp8266_deauther (Spacehuhn)
-- WiFi 802.11 protocol spec (IEEE)
-- Arduino core for ESP8266
-- DNSServer & ESP8266WebServer (Arduino built-in)
-
----
-
-## Kontribusi & Feedback
-
-Report bug, request fitur, atau improve dokumentasi? **Contribution welcome** — fork, improve, PR.
-
-Atau direct message ke contact project di GitHub.
-
----
-
-**Enjoy exploring WiFi security! Stay ethical, stay learning.** 🛡️
+*nethercap — eksplorasi keamanan WiFi di ESP8266. Stay ethical, stay learning.* 🛡️

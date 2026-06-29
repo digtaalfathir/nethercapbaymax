@@ -51,7 +51,7 @@ static const MenuItem MENU[] = {
 static const int MENU_N = sizeof(MENU) / sizeof(MENU[0]);
 
 // hasil scan lokal
-struct ap_t { char ssid[20]; uint8_t bssid[6]; uint8_t ch; int8_t rssi; };
+struct ap_t { char ssid[33]; uint8_t bssid[6]; uint8_t ch; int8_t rssi; };
 static ap_t s_aps[16];
 static int  s_apN = 0, s_apSel = 0, s_apTop = 0;
 
@@ -129,8 +129,8 @@ static void doScan() {
   s_apN = 0;
   for (int i = 0; i < n && s_apN < 16; i++) {
     String ss = WiFi.SSID(i);
-    strncpy(s_aps[s_apN].ssid, ss.length() ? ss.c_str() : "<hidden>", 19);
-    s_aps[s_apN].ssid[19] = 0;
+    strncpy(s_aps[s_apN].ssid, ss.length() ? ss.c_str() : "<hidden>", 32);
+    s_aps[s_apN].ssid[32] = 0;
     memcpy(s_aps[s_apN].bssid, WiFi.BSSID(i), 6);
     s_aps[s_apN].ch   = (uint8_t)WiFi.channel(i);
     s_aps[s_apN].rssi = (int8_t)WiFi.RSSI(i);
@@ -255,15 +255,16 @@ static void drawPdeauth(bool full) {
 }
 
 static void drawEvil(bool full) {
-  if (full) { tft.fillScreen(TFT_BLACK); header("Evil Twin"); footer("tahan OK = kembali"); }
+  if (full) { tft.fillScreen(TFT_BLACK); header("Evil Twin"); footer("OK deauth on/off  tahan=back"); }
   clearBody();
   bool got = evil_got_password();
   banner(got ? COL_OKBG : COL_HDR, got ? "PASSWORD!" : "MENUNGGU");
-  row(HDR_H + 60, "Twin",    shortStr(evil_ssid(), 12));
-  row(HDR_H + 84, "Client",  String(evil_clients()));
+  row(HDR_H + 58, "Twin",    shortStr(evil_ssid(), 12));
+  row(HDR_H + 82, "Client",  String(evil_clients()));
+  row(HDR_H + 106, "Auto-DA", evil_deauth_on() ? ("ON " + String(evil_deauth_count())) : String("OFF"));
   if (got) {
-    tft.setTextFont(2); tft.setTextColor(COL_DIM, TFT_BLACK); tft.setCursor(MX + 2, HDR_H + 110); tft.print("Password:");
-    tft.setTextColor(TFT_WHITE, TFT_BLACK); tft.setCursor(MX + 2, HDR_H + 130); tft.print(evil_password());
+    tft.setTextFont(2); tft.setTextColor(COL_DIM, TFT_BLACK); tft.setCursor(MX + 2, HDR_H + 134); tft.print("Password:");
+    tft.setTextColor(TFT_WHITE, TFT_BLACK); tft.setCursor(MX + 2, HDR_H + 154); tft.print(evil_password());
   }
 }
 
@@ -366,10 +367,14 @@ static void handleButton(nc_btn ev) {
       break;
     }
 
+    case SC_EVIL:
+      if (ev == BTN_OK)   { evil_toggle_deauth(); s_dirty = true; }
+      if (ev == BTN_BACK) exitToMenu();
+      break;
+
     case SC_COUNT:
     case SC_DEAUTH:
     case SC_PDEAUTH:
-    case SC_EVIL:
       if (ev == BTN_BACK) exitToMenu();
       break;
   }

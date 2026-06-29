@@ -16,3 +16,6 @@ int         evil_clients();
 bool        evil_got_password();
 const char* evil_password();
 const char* evil_ssid();
+uint32_t    evil_deauth_count();
+bool        evil_deauth_on();
+void        evil_toggle_deauth();
