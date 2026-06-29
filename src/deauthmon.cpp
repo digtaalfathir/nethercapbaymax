@@ -25,6 +25,8 @@ static volatile uint32_t s_window = 0;   // counter window berjalan (ditulis di 
 static volatile uint32_t s_total  = 0;
 static uint32_t s_lastEval = 0;
 static uint32_t s_lastBeat = 0;
+static uint32_t s_lastRate = 0;   // deauth/detik window terakhir (utk UI)
+static bool     s_alarm    = false;
 
 // -------------------------------------------------------------- helpers ----
 static inline bool mac_eq(const uint8_t* a, const uint8_t* b) { return memcmp(a, b, 6) == 0; }
@@ -97,6 +99,8 @@ void deauthmon_loop() {
 
   uint32_t c = s_window;
   s_window = 0;
+  s_lastRate = c;
+  s_alarm    = (c >= DM_THRESHOLD);
 
   if (c == 0) {
     if (now - s_lastBeat >= DM_BEAT_MS) {
@@ -122,15 +126,31 @@ static void cmd_dmon(int argc, char** argv) {
 
   if (argc >= 2 && strcasecmp(argv[1], "test") == 0) {
     if (!s_on) { Serial.println(F("[dmon] start dulu: ketik 'dmon'")); return; }
-    uint8_t atk[6] = { 0xDE, 0xAD, 0xBE, 0xEF, 0x13, 0x37 };   // attacker palsu
-    uint8_t bss[6] = { 0x6C, 0xA5, 0xD1, 0x32, 0x9E, 0xA0 };   // AP korban palsu
-    for (int i = 0; i < 30; i++) record(atk, bss, 6, -42, millis());
-    s_window += 30;
-    Serial.println(F("[dmon] +30 deauth sintetis disuntik — alarm muncul ~1 detik lagi"));
+    deauthmon_test();
     return;
   }
 
   start();
+}
+
+// ----------------------------------------------------- accessor untuk UI ---
+void deauthmon_start() { if (!s_on) start(); }
+void deauthmon_stop()  { if (s_on)  stop();  }
+bool deauthmon_active(){ return s_on; }
+
+void deauthmon_test() {
+  if (!s_on) return;
+  uint8_t atk[6] = { 0xDE, 0xAD, 0xBE, 0xEF, 0x13, 0x37 };   // attacker palsu
+  uint8_t bss[6] = { 0x6C, 0xA5, 0xD1, 0x32, 0x9E, 0xA0 };   // AP korban palsu
+  for (int i = 0; i < 30; i++) record(atk, bss, 6, -42, millis());
+  s_window += 30;
+  Serial.println(F("[dmon] +30 deauth sintetis disuntik — alarm muncul ~1 detik lagi"));
+}
+
+void deauthmon_get(uint32_t* total, uint32_t* lastRate, bool* alarm) {
+  if (total)    *total    = s_total;
+  if (lastRate) *lastRate = s_lastRate;
+  if (alarm)    *alarm    = s_alarm;
 }
 
 void deauthmon_init() {

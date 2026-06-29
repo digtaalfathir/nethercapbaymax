@@ -159,23 +159,41 @@ static void on_select(const char* line) {
     return;                                   // tetap di mode pilih
   }
 
-  memcpy(s_target, s_scan[idx].bssid, 6);
-  s_targetCh = s_scan[idx].channel;
-  strncpy(s_targetSsid, s_scan[idx].ssid, sizeof(s_targetSsid));
+  station_count_on(s_scan[idx].bssid, s_scan[idx].channel, s_scan[idx].ssid);
+  cli_release();
+}
+
+// programatik (UI) ----------------------------------------------------------
+void station_count_on(const uint8_t* bssid, uint8_t ch, const char* ssid) {
+  memcpy(s_target, bssid, 6);
+  s_targetCh = ch;
+  strncpy(s_targetSsid, ssid, sizeof(s_targetSsid));
   s_targetSsid[sizeof(s_targetSsid) - 1] = 0;
 
   table_reset();
   s_focused = true;
   sniffer_set_hop(false);
   sniffer_set_channel(s_targetCh);
-  sniffer_set_verbose(false);                 // tampilan bersih
+  sniffer_set_verbose(false);
   if (!sniffer_running()) sniffer_start();
-
-  Serial.printf("[count] target: %s (%s) ch%d — menghitung station... ('count stop' untuk berhenti)\n",
-    s_targetSsid[0] ? s_targetSsid : "<hidden>", nc_mac_str(s_target), s_targetCh);
   s_lastShow = millis();
-  cli_release();
+  Serial.printf("[count] target: %s (%s) ch%d\n",
+    s_targetSsid[0] ? s_targetSsid : "<hidden>", nc_mac_str(s_target), s_targetCh);
 }
+
+void station_count_stop() {
+  s_focused = false;
+  sniffer_set_hop(true);
+  sniffer_set_verbose(true);
+  if (sniffer_running()) sniffer_stop();
+}
+
+int station_count_clients() {
+  for (uint8_t i = 0; i < s_apN; i++) if (mac_eq(s_ap[i].bssid, s_target)) return s_ap[i].clients;
+  return 0;
+}
+
+const char* station_count_ssid() { return s_targetSsid; }
 
 static void cmd_count(int argc, char** argv) {
   if (argc >= 2 && strcasecmp(argv[1], "stop") == 0) {

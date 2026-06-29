@@ -8,3 +8,10 @@
 void beacon_init();   // daftar perintah CLI 'beacon'
 void beacon_loop();   // kirim beacon + sweep channel — panggil di loop()
 void beacon_stop();   // hentikan spam (no-op kalau tak jalan) — dipakai modul lain
+
+// Accessor untuk UI/display
+void    beacon_start();
+bool    beacon_running();
+uint8_t beacon_count();
+void    beacon_add_random(int n);
+void    beacon_clear();

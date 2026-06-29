@@ -119,6 +119,13 @@ static void spam_stop() {
 
 void beacon_stop() { if (s_spamming) spam_stop(); }   // cross-module, senyap
 
+// Accessor untuk UI/display
+void    beacon_start()          { spam_start(); }
+bool    beacon_running()        { return s_spamming; }
+uint8_t beacon_count()          { return s_listN; }
+void    beacon_add_random(int n){ gen_random(n); }
+void    beacon_clear()          { s_listN = 0; }
+
 void beacon_loop() {
   if (!s_spamming || s_listN == 0) return;
 

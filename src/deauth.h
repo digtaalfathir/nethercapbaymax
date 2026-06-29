@@ -8,3 +8,9 @@
 void deauth_init();    // daftar perintah CLI 'deauth'
 void deauth_loop();    // kirim deauth saat aktif — panggil di loop()
 void deauth_stop();    // hentikan (no-op kalau tak jalan) — dipakai modul lain
+
+// programatik (untuk UI)
+void        deauth_attack(const uint8_t* bssid, uint8_t ch, const char* ssid);
+bool        deauth_active();
+void        deauth_stats(uint32_t* sent, uint32_t* fail);
+const char* deauth_ssid();

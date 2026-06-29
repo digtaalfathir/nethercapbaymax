@@ -19,6 +19,7 @@
 #include "deauth.h"
 #include "pdeauth.h"
 #include "evil.h"
+#include "ui.h"
 
 #ifndef NETHERCAP_VERSION
 #define NETHERCAP_VERSION "dev"
@@ -66,6 +67,8 @@ void setup() {
   pdeauth_init();
   evil_init();
   cli_begin();                 // daftarkan 'help' + cetak prompt
+
+  ui_init();                   // TFT + tombol (splash -> menu)
 }
 
 void loop() {
@@ -77,4 +80,5 @@ void loop() {
   deauth_loop();
   pdeauth_loop();
   evil_loop();
+  ui_loop();
 }

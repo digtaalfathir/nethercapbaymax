@@ -40,6 +40,10 @@ void    sniffer_set_hop(bool on);
 void    sniffer_set_verbose(bool on);   // cetak frame mentah + stats periodik di loop
 bool    sniffer_add_handler(nc_frame_handler h);   // modul lain meng-intercept frame (maks 4)
 
+// Accessor untuk UI/display
+void    sniffer_get_counts(uint32_t* total, uint32_t* mgmt, uint32_t* data, uint32_t* deauth);
+bool    sniffer_get_hop();
+
 // Helper format
 const char* nc_mac_str(const uint8_t* mac);            // "AA:BB:CC:DD:EE:FF" (buffer statis)
 const char* nc_subtype_name(uint8_t type, uint8_t subtype);

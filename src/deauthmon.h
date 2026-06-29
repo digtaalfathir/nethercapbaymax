@@ -8,3 +8,10 @@
 
 void deauthmon_init();   // pasang handler sniffer + perintah CLI 'dmon'
 void deauthmon_loop();   // evaluasi window + alarm/heartbeat — panggil di loop()
+
+// Accessor untuk UI/display
+void deauthmon_start();
+void deauthmon_stop();
+bool deauthmon_active();
+void deauthmon_test();   // suntik 30 deauth sintetis (uji alarm)
+void deauthmon_get(uint32_t* total, uint32_t* lastRate, bool* alarm);
