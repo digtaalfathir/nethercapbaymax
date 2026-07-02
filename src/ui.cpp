@@ -10,6 +10,7 @@
 #include "settings.h"
 #include <TFT_eSPI.h>
 #include <ESP8266WiFi.h>
+#include "lock_img.h"
 
 #ifndef NETHERCAP_VERSION
 #define NETHERCAP_VERSION "dev"
@@ -30,12 +31,16 @@ static uint16_t COL_ACCENT, COL_HDR, COL_DIM, COL_ALARM, COL_OKBG;
 // tujuan layar SCAN: lihat-saja atau pilih target untuk fitur
 enum Purpose { P_VIEW, P_COUNT, P_DEAUTH, P_PDEAUTH, P_EVIL };
 
-enum Screen { SC_MENU, SC_SCAN, SC_SNIFF, SC_DMON, SC_BEACON,
+enum Screen { SC_LOCK, SC_MENU, SC_SCAN, SC_SNIFF, SC_DMON, SC_BEACON,
               SC_COUNT, SC_DEAUTH, SC_DEAUTHALL, SC_PDCLI, SC_PDEAUTH, SC_EVIL, SC_SETTINGS };
 static Screen   s_screen   = SC_MENU;
 static int      s_sel      = 0;
 static bool     s_dirty    = true;
 static uint32_t s_lastRefresh = 0;
+static uint32_t s_lastActivity = 0;    // untuk auto-lock kembali ke foto
+
+// menu utama diam selama ini (ms) tanpa tombol -> balik ke lock screen (foto)
+#define LOCK_TIMEOUT_MS 30000
 static Purpose  s_pick     = P_VIEW;
 static int      s_setSel   = 0;    // field terpilih di layar Settings
 
@@ -300,6 +305,36 @@ static void drawSettings() {
   footer("UP/DN ubah  OK pindah  tahan simpan");
 }
 
+// lock screen: foto sebagai "kunci". OK untuk buka. (auto-lock dari menu utama)
+static void drawLock() {
+#ifdef LOCK_IMG_AVAILABLE
+  // Foto asli tampil penuh, tanpa overlay teks ("foto aja").
+  #if (LOCK_IMG_W < W) || (LOCK_IMG_H < H)
+  tft.fillScreen(TFT_BLACK);
+  #endif
+  tft.setSwapBytes(true);      // kalau warna terlihat aneh/terbalik, ubah jadi false
+  tft.pushImage((W - LOCK_IMG_W) / 2, (H - LOCK_IMG_H) / 2, LOCK_IMG_W, LOCK_IMG_H, lock_img);
+  tft.setSwapBytes(false);
+#else
+  // Placeholder — belum ada foto. Pasang foto:
+  //   python3 tools/img2h.py foto.png -o src/lock_img.h
+  tft.fillScreen(TFT_BLACK);
+  const int cx = W / 2, cy = 116, r = 26;
+  for (int t = 0; t < 7; t++) tft.drawCircleHelper(cx, cy, r + t, 0x1 | 0x2, COL_DIM);  // busur gembok
+  tft.fillRect(cx - r - 6, cy, 6, 24, COL_DIM);
+  tft.fillRect(cx + r,     cy, 6, 24, COL_DIM);
+  tft.fillRoundRect(cx - 46, cy + 22, 92, 72, 10, COL_ACCENT);                          // badan gembok
+  tft.fillCircle(cx, cy + 50, 9, TFT_BLACK);                                            // lubang kunci
+  tft.fillTriangle(cx - 6, cy + 78, cx + 6, cy + 78, cx, cy + 54, TFT_BLACK);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextFont(4); tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.drawString("NETHERCAP", cx, 34);
+  tft.setTextFont(2); tft.setTextColor(COL_DIM, TFT_BLACK);
+  tft.drawString("Tekan OK untuk buka", cx, H - 40);
+  tft.setTextDatum(TL_DATUM);
+#endif
+}
+
 // ---------------------------------------------------------- navigation ----
 static void enterScreen(Screen sc) {
   s_screen = sc;
@@ -351,6 +386,12 @@ static void launchSelected() {
 
 static void handleButton(nc_btn ev) {
   switch (s_screen) {
+    case SC_LOCK:
+      if (ev == BTN_OK || ev == BTN_BACK) {   // OK (atau tahan OK) -> buka kunci
+        s_sel = 0; s_screen = SC_MENU; s_dirty = true;
+      }
+      break;
+
     case SC_MENU:
       if (ev == BTN_UP)   { s_sel = (s_sel - 1 + MENU_N) % MENU_N; s_dirty = true; }
       if (ev == BTN_DOWN) { s_sel = (s_sel + 1) % MENU_N;         s_dirty = true; }
@@ -433,6 +474,7 @@ static void handleButton(nc_btn ev) {
 
 static void drawScreen(bool full) {
   switch (s_screen) {
+    case SC_LOCK:    drawLock();         break;
     case SC_MENU:    drawMenu();         break;
     case SC_SCAN:    drawScan();         break;
     case SC_SNIFF:   drawSniff(full);    break;
@@ -459,27 +501,26 @@ void ui_init() {
   COL_ALARM  = tft.color565(200, 40, 40);
   COL_OKBG   = tft.color565(20, 120, 70);
 
-  // splash (di-center)
-  tft.fillScreen(TFT_BLACK);
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextFont(4); tft.setTextColor(COL_ACCENT, TFT_BLACK);
-  tft.drawString("Nethercap", W / 2, 116);
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.drawString("Baymax", W / 2, 150);
-  tft.setTextFont(2); tft.setTextColor(COL_DIM, TFT_BLACK);
-  tft.drawString("v" NETHERCAP_VERSION, W / 2, 182);
-  tft.setTextDatum(TL_DATUM);
-  delay(1400);
-
-  s_screen = SC_MENU; s_dirty = true;
+  // Lock screen langsung tampil (foto sebagai "kunci"). OK untuk buka.
+  s_screen       = SC_LOCK;
+  s_lastActivity = millis();
+  drawScreen(true);
+  s_dirty        = false;
 }
 
 void ui_loop() {
   nc_btn ev = buttons_poll();
-  if (ev != BTN_NONE) handleButton(ev);
-
   uint32_t now = millis();
-  bool live = (s_screen != SC_MENU && s_screen != SC_SCAN && s_screen != SC_SETTINGS);
+  if (ev != BTN_NONE) { s_lastActivity = now; handleButton(ev); }
+
+  // auto-lock: dari menu utama, kalau diam terlalu lama -> balik ke foto
+  if (s_screen == SC_MENU && (now - s_lastActivity) >= LOCK_TIMEOUT_MS) {
+    s_screen = SC_LOCK;
+    s_dirty  = true;
+  }
+
+  bool live = (s_screen != SC_MENU && s_screen != SC_SCAN &&
+               s_screen != SC_SETTINGS && s_screen != SC_LOCK);
   if (s_dirty) {
     drawScreen(true);
     s_dirty = false;

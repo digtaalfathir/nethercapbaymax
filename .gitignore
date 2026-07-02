@@ -3,3 +3,6 @@
 !.vscode/extensions.json
 *.bin
 *.elf
+
+# foto sumber lock screen (pribadi) — firmware hanya butuh src/lock_img.h hasil konversi
+lock.jpeg
