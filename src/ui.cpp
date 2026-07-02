@@ -7,6 +7,7 @@
 #include "deauth.h"
 #include "pdeauth.h"
 #include "evil.h"
+#include "settings.h"
 #include <TFT_eSPI.h>
 #include <ESP8266WiFi.h>
 
@@ -30,23 +31,24 @@ static uint16_t COL_ACCENT, COL_HDR, COL_DIM, COL_ALARM, COL_OKBG;
 enum Purpose { P_VIEW, P_COUNT, P_DEAUTH, P_PDEAUTH, P_EVIL };
 
 enum Screen { SC_MENU, SC_SCAN, SC_SNIFF, SC_DMON, SC_BEACON,
-              SC_COUNT, SC_DEAUTH, SC_PDCLI, SC_PDEAUTH, SC_EVIL };
+              SC_COUNT, SC_DEAUTH, SC_DEAUTHALL, SC_PDCLI, SC_PDEAUTH, SC_EVIL, SC_SETTINGS };
 static Screen   s_screen   = SC_MENU;
 static int      s_sel      = 0;
 static bool     s_dirty    = true;
 static uint32_t s_lastRefresh = 0;
 static Purpose  s_pick     = P_VIEW;
+static int      s_setSel   = 0;    // field terpilih di layar Settings
 
 struct MenuItem { const char* name; Screen screen; Purpose purpose; };
 static const MenuItem MENU[] = {
-  { "Scan AP",        SC_SCAN,   P_VIEW    },
-  { "Sniffer",        SC_SNIFF,  P_VIEW    },
-  { "Deauth Monitor", SC_DMON,   P_VIEW    },
-  { "Beacon Spam",    SC_BEACON, P_VIEW    },
-  { "Count Station",  SC_SCAN,   P_COUNT   },
-  { "Deauth",         SC_SCAN,   P_DEAUTH  },
-  { "Precise Deauth", SC_SCAN,   P_PDEAUTH },
-  { "Evil Twin",      SC_SCAN,   P_EVIL    },
+  { "Count Station",  SC_SCAN,      P_COUNT   },
+  { "Beacon Spam",    SC_BEACON,    P_VIEW    },
+  { "Deauth Monitor", SC_DMON,      P_VIEW    },
+  { "Deauth",         SC_SCAN,      P_DEAUTH  },
+  { "Deauth All",     SC_DEAUTHALL, P_VIEW    },
+  { "Precise Deauth", SC_SCAN,      P_PDEAUTH },
+  { "Evil Twin",      SC_SCAN,      P_EVIL    },
+  { "Settings",       SC_SETTINGS,  P_VIEW    },
 };
 static const int MENU_N = sizeof(MENU) / sizeof(MENU[0]);
 
@@ -268,6 +270,36 @@ static void drawEvil(bool full) {
   }
 }
 
+static void drawDeauthAll(bool full) {
+  if (full) { tft.fillScreen(TFT_BLACK); header("Deauth All"); footer("tahan OK = kembali"); }
+  clearBody();
+  banner(COL_ALARM, "GEMPUR SEMUA");
+  uint32_t sent = 0, fail = 0; deauth_stats(&sent, &fail);
+  row(HDR_H + 60,  "Target", String(deauth_all_count()) + " AP");
+  row(HDR_H + 86,  "Sukses", String(sent));
+  row(HDR_H + 112, "Gagal",  String(fail));
+}
+
+static void drawSettings() {
+  tft.fillScreen(TFT_BLACK); header("Settings");
+  nc_settings* c = settings_get();
+  const char* names[3] = { "Deauth ambang", "Beacon acak", "Evil auto-DA" };
+  String vals[3] = { String(c->dmon_threshold), String(c->beacon_random),
+                     c->evil_autodeauth ? "ON" : "OFF" };
+  tft.setTextFont(2);
+  for (int i = 0; i < 3; i++) {
+    int y = HDR_H + 16 + i * 34;
+    uint16_t bg = (i == s_setSel) ? COL_ACCENT : TFT_BLACK;
+    if (i == s_setSel) tft.fillRoundRect(MX, y - 4, W - 2 * MX, 30, 5, COL_ACCENT);
+    tft.setTextColor(i == s_setSel ? TFT_WHITE : 0xCE59, bg);
+    tft.setCursor(MX + 8, y + 3); tft.print(names[i]);
+    tft.setTextDatum(TR_DATUM); tft.setTextColor(TFT_WHITE, bg);
+    tft.drawString(vals[i], W - MX - 8, y + 3);
+    tft.setTextDatum(TL_DATUM);
+  }
+  footer("UP/DN ubah  OK pindah  tahan simpan");
+}
+
 // ---------------------------------------------------------- navigation ----
 static void enterScreen(Screen sc) {
   s_screen = sc;
@@ -278,6 +310,8 @@ static void enterScreen(Screen sc) {
                     if (!sniffer_running()) sniffer_start(); break;
     case SC_DMON:   deauthmon_start(); break;
     case SC_PDCLI:  s_pdSel = 0; s_pdTop = 0; break;
+    case SC_DEAUTHALL: deauth_all_start(); break;
+    case SC_SETTINGS:  s_setSel = 0; break;
     default: break;
   }
 }
@@ -292,6 +326,8 @@ static void exitToMenu() {
     case SC_PDCLI:
     case SC_PDEAUTH: pdeauth_stop();      break;
     case SC_EVIL:    evil_stop();         break;
+    case SC_DEAUTHALL: deauth_stop();     break;
+    case SC_SETTINGS:  settings_save();   break;
     default: break;
   }
   s_screen = SC_MENU;
@@ -341,8 +377,8 @@ static void handleButton(nc_btn ev) {
       break;
 
     case SC_BEACON:
-      if (ev == BTN_OK)   { if (beacon_running()) beacon_stop(); else { if (beacon_count() == 0) beacon_add_random(5); beacon_start(); } s_dirty = true; }
-      if (ev == BTN_UP)   { beacon_add_random(5); s_dirty = true; }
+      if (ev == BTN_OK)   { if (beacon_running()) beacon_stop(); else { if (beacon_count() == 0) beacon_add_random(settings_get()->beacon_random); beacon_start(); } s_dirty = true; }
+      if (ev == BTN_UP)   { beacon_add_random(settings_get()->beacon_random); s_dirty = true; }
       if (ev == BTN_DOWN) { beacon_stop(); beacon_clear(); s_dirty = true; }
       if (ev == BTN_BACK) exitToMenu();
       break;
@@ -374,9 +410,24 @@ static void handleButton(nc_btn ev) {
 
     case SC_COUNT:
     case SC_DEAUTH:
+    case SC_DEAUTHALL:
     case SC_PDEAUTH:
       if (ev == BTN_BACK) exitToMenu();
       break;
+
+    case SC_SETTINGS: {
+      nc_settings* c = settings_get();
+      if (ev == BTN_OK)   { s_setSel = (s_setSel + 1) % 3; s_dirty = true; }
+      if (ev == BTN_UP || ev == BTN_DOWN) {
+        int d = (ev == BTN_UP) ? 1 : -1;
+        if (s_setSel == 0)      { int v = c->dmon_threshold + d; c->dmon_threshold = v < 1 ? 1 : (v > 50 ? 50 : v); }
+        else if (s_setSel == 1) { int v = c->beacon_random + d;  c->beacon_random  = v < 1 ? 1 : (v > 32 ? 32 : v); }
+        else                    { c->evil_autodeauth = (ev == BTN_UP) ? 1 : 0; }
+        s_dirty = true;
+      }
+      if (ev == BTN_BACK) exitToMenu();
+      break;
+    }
   }
 }
 
@@ -392,6 +443,8 @@ static void drawScreen(bool full) {
     case SC_PDCLI:   drawPdClients(full);break;
     case SC_PDEAUTH: drawPdeauth(full);  break;
     case SC_EVIL:    drawEvil(full);     break;
+    case SC_DEAUTHALL: drawDeauthAll(full); break;
+    case SC_SETTINGS:  drawSettings();      break;
   }
 }
 
@@ -426,7 +479,7 @@ void ui_loop() {
   if (ev != BTN_NONE) handleButton(ev);
 
   uint32_t now = millis();
-  bool live = (s_screen != SC_MENU && s_screen != SC_SCAN);
+  bool live = (s_screen != SC_MENU && s_screen != SC_SCAN && s_screen != SC_SETTINGS);
   if (s_dirty) {
     drawScreen(true);
     s_dirty = false;

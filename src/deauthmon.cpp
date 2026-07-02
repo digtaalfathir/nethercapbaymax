@@ -1,6 +1,7 @@
 #include "deauthmon.h"
 #include "sniffer.h"
 #include "cli.h"
+#include "settings.h"
 #include <string.h>
 
 #define DM_MAX_SRC    16
@@ -78,7 +79,7 @@ static void start() {
   sniffer_set_verbose(false);
   sniffer_set_hop(true);
   if (!sniffer_running()) sniffer_start();
-  Serial.printf("[dmon] MONITOR aktif — ambang %u deauth/detik, hop on.\n", DM_THRESHOLD);
+  Serial.printf("[dmon] MONITOR aktif — ambang %u deauth/detik, hop on.\n", settings_get()->dmon_threshold);
   Serial.println(F("       'dmon stop' berhenti | 'dmon test' uji alarm"));
 }
 
@@ -97,10 +98,11 @@ void deauthmon_loop() {
   if (now - s_lastEval < DM_WINDOW_MS) return;
   s_lastEval = now;
 
+  uint8_t thr = settings_get()->dmon_threshold;
   uint32_t c = s_window;
   s_window = 0;
   s_lastRate = c;
-  s_alarm    = (c >= DM_THRESHOLD);
+  s_alarm    = (c >= thr);
 
   if (c == 0) {
     if (now - s_lastBeat >= DM_BEAT_MS) {
@@ -111,9 +113,9 @@ void deauthmon_loop() {
   }
   s_lastBeat = now;
 
-  if (c >= DM_THRESHOLD) {
+  if (c >= thr) {
     Serial.printf("\n*** ALARM DEAUTH *** %lu frame/detik (ambang %u) — kemungkinan serangan!\n",
-                  (unsigned long)c, DM_THRESHOLD);
+                  (unsigned long)c, thr);
     print_sources();
   } else {
     Serial.printf("[dmon] %lu deauth/disassoc per detik (di bawah ambang)\n", (unsigned long)c);

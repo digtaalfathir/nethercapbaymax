@@ -4,6 +4,7 @@
 #include "beacon.h"
 #include "deauth.h"
 #include "pdeauth.h"
+#include "settings.h"
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 #include <DNSServer.h>
@@ -172,7 +173,8 @@ void evil_attack(const uint8_t* bssid, uint8_t ch, const char* ssid) {
   s_ch = ch;
   strncpy(s_ssid, ssid, sizeof(s_ssid)); s_ssid[sizeof(s_ssid) - 1] = 0;
   s_pwd[0] = 0; s_verdict = V_NONE;
-  s_autoDeauth = false; s_lastDeauth = 0; s_deauthSent = 0; s_okTime = 0;
+  s_autoDeauth = settings_get()->evil_autodeauth;   // default dari settings
+  s_lastDeauth = 0; s_deauthSent = 0; s_okTime = 0;
 
   // bersihkan mode lain
   if (sniffer_running()) sniffer_stop();
